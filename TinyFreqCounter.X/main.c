@@ -47,8 +47,12 @@
 extern char getch(void);
 extern void putch(char c);
 extern int kbhit(void);
+static void refresh_LED(void);
+static void set_digit(int n);
 
-#define TOGGLE do { LATC2 ^= 1; } while(0)
+#define TEST LATA7
+
+#define TOGGLE do { TEST ^= 1; } while(0)
 
 static uint16_t raw_count = 0;
 static int measure_finished = 0;
@@ -56,19 +60,31 @@ static uint16_t prescaler_factor = 0;
 
 void TIM1_intr(void)
 {
-    // Stop Measurement
-    TMR1_StopTimer();
-    TMR0_StopTimer();
-    raw_count = TMR0_ReadTimer();
-    if (raw_count != 0)
-        measure_finished = 1;
-    TOGGLE;
-    TOGGLE;
-
+    static int count = 0;
+    static int i = 0;
+    if ((count % 100) == 0) {
+        set_digit(i++);
+    }
+    if ((count++ & 0x7) == 0) {
+        // Stop Measurement
+        TMR1_StopTimer();
+        TMR0_StopTimer();
+        raw_count = TMR0_ReadTimer();
+        if (raw_count != 0)
+            measure_finished = 1;
+        TOGGLE;
+        TOGGLE;
+        TMR1_WriteTimer(0);
+        TMR0_WriteTimer(0);
+        TMR0_StartTimer();
+        TMR1_StartTimer();
+    }
+    refresh_LED();
 }
 
 void TIM2_intr(void)
 {
+    return;
     // Start Measurement
     TMR1_WriteTimer(0);
     TMR0_WriteTimer(0);
@@ -76,7 +92,7 @@ void TIM2_intr(void)
     TMR0_StartTimer();
     TMR1_StartTimer();
     TMR0IF = 0;  // clear flag
-    LATC2 = 1;
+    TEST = 1;
     TOGGLE;
     TOGGLE;
 }
@@ -84,6 +100,51 @@ void TIM2_intr(void)
 int TIM0_rollover(void)
 {
     return TMR0IF;      // TIM0 roll over flag
+}
+
+/*
+ * LED dynamic driver
+ */
+
+static char segment_pattern[16] = {
+    0b00111111, //0b11111100, // 0
+    0b00000110, //0b01100000, // 1
+    0b01011011, //0b11011010, // 2
+    0b01001111, //0b11110010, // 3
+    0b01100110, //0b01100110, // 4
+    0b01101101, //0b10110110, // 5
+    0b01111101, //0b10111110, // 6
+    0b00000111, //0b11100000, // 7
+    0b01111111, //0b11111110, // 8
+    0b01101111, //0b11110110, // 9
+    0b01110111, //0b11101110, // A
+    0b01111100, //0b00111110, // b
+    0b00111001, //0b10011100, // C
+    0b01011110, //0b01111010, // d
+    0b01111001, //0b10011110, // E
+    0b01110001, //0b10001110, // F
+};
+
+static char digit[3];
+
+static void set_digit(int n)
+{
+    digit[2] = n % 10;
+    n /= 10;
+    digit[1] = n % 10;
+    n /= 10;
+    digit[0] = n % 10;
+}
+
+static void refresh_LED(void)
+{
+    static char digit_bit = 1;
+    static int count = 1;
+    digit_bit <<= 1;
+    if (digit_bit & 0x8)
+        digit_bit = 1;
+    LATB = (LATB & 0xf8) | digit_bit;
+    LATC = ~segment_pattern[digit[(count++) % 3]];
 }
 
 /*
@@ -119,6 +180,8 @@ void main(void)
     LATC2 = 0;
     TRISC2 = 0; // output
 
+    
+    LATC = 0;
     
     printf("start\n");
     //TIM2_intr();
