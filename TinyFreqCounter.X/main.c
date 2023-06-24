@@ -48,7 +48,9 @@ extern char getch(void);
 extern void putch(char c);
 extern int kbhit(void);
 static void refresh_LED(void);
-static void set_digit(int n);
+static void set_digit(unsigned int n);
+static void set_point(int digit);
+static void set_suppressed(int flag);
 
 #define TEST LATA7
 
@@ -62,7 +64,9 @@ void TIM1_intr(void)
 {
     static int count = 0;
     static int i = 0;
-    if ((count % 100) == 0) {
+    if ((count % 32) == 0) {
+        set_point(1);
+        set_suppressed(1);
         set_digit(i++);
     }
     if ((count++ & 0x7) == 0) {
@@ -88,7 +92,7 @@ void TIM2_intr(void)
     // Start Measurement
     TMR1_WriteTimer(0);
     TMR0_WriteTimer(0);
-    T0CON1 = (0x10 | prescaler_factor);
+    T0CON1 = (unsigned char)(0x10 | prescaler_factor);
     TMR0_StartTimer();
     TMR1_StartTimer();
     TMR0IF = 0;  // clear flag
@@ -107,44 +111,95 @@ int TIM0_rollover(void)
  */
 
 static char segment_pattern[16] = {
-    0b00111111, //0b11111100, // 0
-    0b00000110, //0b01100000, // 1
-    0b01011011, //0b11011010, // 2
-    0b01001111, //0b11110010, // 3
+    0b11111100, //0b00111111, // 0
+    0b01100000, //0b00000110, // 1
+    0b11011010, //0b01011011, // 2
+    0b11110010, //0b01001111, // 3
     0b01100110, //0b01100110, // 4
-    0b01101101, //0b10110110, // 5
-    0b01111101, //0b10111110, // 6
-    0b00000111, //0b11100000, // 7
-    0b01111111, //0b11111110, // 8
-    0b01101111, //0b11110110, // 9
-    0b01110111, //0b11101110, // A
-    0b01111100, //0b00111110, // b
-    0b00111001, //0b10011100, // C
-    0b01011110, //0b01111010, // d
-    0b01111001, //0b10011110, // E
-    0b01110001, //0b10001110, // F
+    0b10110110, //0b01101101, // 5
+    0b10111110, //0b01111101, // 6
+    0b11100000, //0b00000111, // 7
+    0b11111110, //0b01111111, // 8
+    0b11110110, //0b01101111, // 9
+    0b11101110, //0b01110111, // A
+    0b00111110, //0b01111100, // b
+    0b10011100, //0b00111001, // C
+    0b01111010, //0b01011110, // d
+    0b10011110, //0b01111001, // E
+    0b10001110, //0b01110001, // F
 };
 
-static char digit[3];
+#define LED_DIGITS 3
+static char led_digit[LED_DIGITS];
+static int suppress_zero = 0;
+static int digit_point = LED_DIGITS;
 
-static void set_digit(int n)
+//
+// set_point: set dicimal point position, topmost is 0, least digit is LED_DIGITS-1
+//            if it is begger than LED_DIGITS, no points are displayed.
+//
+
+static void set_point(int digit)
 {
-    digit[2] = n % 10;
-    n /= 10;
-    digit[1] = n % 10;
-    n /= 10;
-    digit[0] = n % 10;
+    digit_point = digit;
+}
+
+//
+// set_suppressed: If it is called with 1, zero suppress occurs.
+//
+
+static void set_suppressed(int flag)
+{
+    suppress_zero = flag;
+}
+
+static void set_digit(unsigned int n)
+{
+    int modular = 1;
+    int i;
+    for (i = 0; i < LED_DIGITS; ++i) {
+        modular *= 10;
+    }
+    n %= modular;
+    while (i-- >= 0) {
+        led_digit[i] = n % 10;
+        n /= 10;
+    }
 }
 
 static void refresh_LED(void)
 {
-    static char digit_bit = 1;
-    static int count = 1;
-    digit_bit <<= 1;
-    if (digit_bit & 0x8)
-        digit_bit = 1;
+    char digit_bit;
+    static int count = 0;
+    int suppressed_digit = -1;
+    // set digit drive bit
+    digit_bit = (1 << count);
     LATB = (LATB & 0xf8) | digit_bit;
-    LATC = ~segment_pattern[digit[(count++) % 3]];
+    // zero suppress
+    if (suppress_zero) {
+        int i, n;
+        n = digit_point > LED_DIGITS ? LED_DIGITS : digit_point;
+        for (i = 0; i < n; ++i) {
+            if (led_digit[i] != 0)
+                break;
+            // suppress
+        }
+        if (i == LED_DIGITS) {
+            i--;    // display at least one digit
+        }
+        suppressed_digit = i;
+    }
+    // set 7-segment bit pattern
+    char bit_pattern = segment_pattern[led_digit[count % 3]];
+    if (count == digit_point)
+        bit_pattern |= 1;   // set digit point
+    if (count < suppressed_digit) {
+        bit_pattern = 0;    // suppress
+    }
+    LATC = ~bit_pattern;        // anode common, inverted
+    static char x = 0;
+    count++;
+    count %= 3;
 }
 
 /*
@@ -182,7 +237,6 @@ void main(void)
 
     
     LATC = 0;
-    
     printf("start\n");
     //TIM2_intr();
     //TMR2_StartTimer();
@@ -194,6 +248,7 @@ void main(void)
             if (prescaler_factor >= 16)
                 break;
             printf("%2d %5u\n", prescaler_factor, raw_count);
+            // calibrating iwth 1000/997
             freq = (((uint32_t)raw_count * 10 * 1000) / 997);
             //freq = ((uint32_t)raw_count * 10);
             if (prescaler_factor > 4 && (1024 <= raw_count && raw_count < 2048)) {
