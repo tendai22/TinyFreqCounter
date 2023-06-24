@@ -174,7 +174,7 @@ static void refresh_LED(void)
     int suppressed_digit = -1;
     // set digit drive bit
     digit_bit = (1 << count);
-    LATB = (LATB & 0xf8) | digit_bit;
+    LATB = (LATB & 0xf8) | 0;
     // zero suppress
     if (suppress_zero) {
         int i, n;
@@ -197,6 +197,7 @@ static void refresh_LED(void)
         bit_pattern = 0;    // suppress
     }
     LATC = ~bit_pattern;        // anode common, inverted
+    LATB |= digit_bit;
     static char x = 0;
     count++;
     count %= 3;
